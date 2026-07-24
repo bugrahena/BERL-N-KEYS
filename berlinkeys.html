@@ -479,7 +479,6 @@
             background: var(--accent-glow);
         }
         .actions-cell { display: flex; gap: 6px; }
-        .key-row-expired { opacity: 0.45; }
 
         .empty-state { text-align: center; padding: 60px 20px; }
         .empty-icon { font-size: 48px; margin-bottom: 16px; opacity: 0.3; }
@@ -621,6 +620,22 @@
             font-family: 'JetBrains Mono', monospace;
         }
 
+        /* AUTO DELETE INDICATOR */
+        .auto-delete-badge {
+            display: inline-flex; align-items: center; gap: 5px;
+            padding: 3px 8px; border-radius: 4px; font-size: 10px;
+            font-weight: 700; font-family: 'JetBrains Mono', monospace;
+            background: rgba(225, 112, 85, 0.12);
+            color: var(--danger);
+            border: 1px solid rgba(225, 112, 85, 0.2);
+            margin-left: 8px;
+            animation: blinkBadge 2s ease-in-out infinite;
+        }
+        @keyframes blinkBadge {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
         @media (max-width: 1024px) {
             .main-grid { grid-template-columns: 1fr; }
             .stats-bar { grid-template-columns: repeat(2, 1fr); }
@@ -708,7 +723,7 @@
         <!-- Header -->
         <div class="page-header">
             <h1>Key Management Panel</h1>
-            <p>Berlin Lite lisans keylerini oluşturun ve GitHub reposuna otomatik push edin. Süresi dolan keyler otomatik silinir.</p>
+            <p>Berlin Lite lisans keylerini oluşturun ve GitHub reposuna otomatik push edin. Süresi dolan keyler <strong>otomatik silinir</strong> ve GitHub güncellenir.</p>
         </div>
 
         <!-- GitHub Connection Setup -->
@@ -756,9 +771,9 @@
                     <div class="stat-change">● Şu an aktif</div>
                 </div>
                 <div class="stat-card">
-                    <div class="stat-label">Süresi Dolan</div>
+                    <div class="stat-label">Otomatik Silinen</div>
                     <div class="stat-value danger" id="statExpired">0</div>
-                    <div class="stat-change">↘ Otomatik silindi</div>
+                    <div class="stat-change">🗑️ Otomatik silindi</div>
                 </div>
                 <div class="stat-card">
                     <div class="stat-label">Lifetime Key</div>
@@ -833,7 +848,7 @@
 
                         <div class="form-note">
                             <span>ℹ️</span>
-                            <span>Key oluşturulduğunda otomatik olarak GitHub reposuna push edilir. Süresi dolan keyler otomatik silinir ve repo güncellenir.</span>
+                            <span>Key oluşturulduğunda GitHub'a push edilir. Süresi dolan keyler <strong>otomatik silinir</strong> ve GitHub güncellenir.</span>
                         </div>
 
                         <div class="key-output" id="keyOutput">
@@ -872,12 +887,15 @@
                         <div class="panel-header-left">
                             <div class="panel-icon">📋</div>
                             <div>
-                                <div class="panel-title">Aktif Keyler</div>
-                                <div class="panel-subtitle">Gerçek zamanlı takip</div>
+                                <div class="panel-title">
+                                    Aktif Keyler
+                                    <span class="auto-delete-badge">⚡ Otomatik Silme Aktif</span>
+                                </div>
+                                <div class="panel-subtitle">Gerçek zamanlı takip — süresi dolanlar otomatik silinir</div>
                             </div>
                         </div>
                         <div class="bulk-actions">
-                            <button class="btn-sm btn-outline-danger" onclick="clearExpired()">🗑️ Expired Sil</button>
+                            <button class="btn-sm btn-outline-accent" onclick="manualCheckAndClean()">🔄 Temizle</button>
                         </div>
                     </div>
 
@@ -889,7 +907,6 @@
                         <div class="table-filters">
                             <button class="filter-btn active" onclick="setFilter('all', this)">Tümü</button>
                             <button class="filter-btn" onclick="setFilter('active', this)">Aktif</button>
-                            <button class="filter-btn" onclick="setFilter('expired', this)">Expired</button>
                             <button class="filter-btn" onclick="setFilter('lifetime', this)">Lifetime</button>
                         </div>
                     </div>
@@ -918,7 +935,9 @@
 
                     <div class="table-footer">
                         <div class="table-info" id="tableInfo">0 key</div>
-                        <div></div>
+                        <div style="font-size: 11px; color: var(--text-muted);" id="autoDeleteInfo">
+                            ⏱️ Otomatik kontrol: 30 saniyede bir
+                        </div>
                     </div>
                 </div>
             </div>
@@ -974,22 +993,25 @@
         let githubConnected = false;
         let fileSHA = null;
 
+        // Otomatik silme istatistiği için
+        let totalAutoDeleted = parseInt(localStorage.getItem('berlin_auto_deleted') || '0');
+
         const durationMap = {
-            'single': { label: 'Tek Kullanım', ms: 0, class: 'type-single' },
-            '5h':     { label: '5 Saat',       ms: 5 * 3600000, class: 'type-5h' },
-            '1d':     { label: '1 Gün',        ms: 86400000, class: 'type-1d' },
-            '7d':     { label: '7 Gün',        ms: 604800000, class: 'type-7d' },
-            '30d':    { label: '30 Gün',       ms: 2592000000, class: 'type-30d' },
-            'lifetime': { label: 'Lifetime',   ms: -1, class: 'type-lifetime' }
+            'single':   { label: 'Tek Kullanım', ms: 0,           class: 'type-single' },
+            '5h':       { label: '5 Saat',        ms: 5*3600000,   class: 'type-5h' },
+            '1d':       { label: '1 Gün',          ms: 86400000,    class: 'type-1d' },
+            '7d':       { label: '7 Gün',          ms: 604800000,   class: 'type-7d' },
+            '30d':      { label: '30 Gün',         ms: 2592000000,  class: 'type-30d' },
+            'lifetime': { label: 'Lifetime',       ms: -1,          class: 'type-lifetime' }
         };
 
         // ==================== GITHUB API ====================
         function getToken() { return document.getElementById('githubToken').value.trim(); }
-        function getRepo() { return document.getElementById('githubRepo').value.trim(); }
+        function getRepo()  { return document.getElementById('githubRepo').value.trim(); }
 
         async function testConnection() {
             const token = getToken();
-            const repo = getRepo();
+            const repo  = getRepo();
 
             if (!token || !repo) {
                 showToast('error', 'Token ve Repo alanlarını doldurun.');
@@ -1018,22 +1040,26 @@
 
                 document.getElementById('connectionStatus').style.display = 'block';
                 document.getElementById('connectionStatus').className = 'connection-status ok';
-                document.getElementById('connectionStatus').innerHTML = `✅ <strong>${data.full_name}</strong> reposuna başarıyla bağlandı!`;
+                document.getElementById('connectionStatus').innerHTML =
+                    `✅ <strong>${data.full_name}</strong> reposuna başarıyla bağlandı!`;
 
                 document.getElementById('connectionLabel').textContent = 'GitHub Bağlı';
                 document.getElementById('setupPanel').classList.add('connected');
-
                 btn.textContent = '✓ Bağlı';
 
                 showToast('success', `GitHub bağlantısı başarılı: ${data.full_name}`);
 
-                // Fetch existing file
+                // Mevcut dosyayı çek
                 await fetchFileFromGitHub();
+
+                // Bağlandıktan hemen sonra expire kontrolü yap
+                checkExpiry();
 
             } catch (err) {
                 document.getElementById('connectionStatus').style.display = 'block';
                 document.getElementById('connectionStatus').className = 'connection-status err';
-                document.getElementById('connectionStatus').innerHTML = `❌ Bağlantı hatası: ${err.message}`;
+                document.getElementById('connectionStatus').innerHTML =
+                    `❌ Bağlantı hatası: ${err.message}`;
 
                 btn.textContent = 'Bağlan';
                 btn.disabled = false;
@@ -1044,28 +1070,28 @@
 
         async function fetchFileFromGitHub() {
             const token = getToken();
-            const repo = getRepo();
+            const repo  = getRepo();
             if (!token || !repo) return;
 
             try {
-                const res = await fetch(`https://api.github.com/repos/${repo}/contents/${GITHUB_FILE_PATH_ENCODED}`, {
-                    headers: {
-                        'Authorization': `token ${token}`,
-                        'Accept': 'application/vnd.github.v3+json'
+                const res = await fetch(
+                    `https://api.github.com/repos/${repo}/contents/${GITHUB_FILE_PATH_ENCODED}`,
+                    {
+                        headers: {
+                            'Authorization': `token ${token}`,
+                            'Accept': 'application/vnd.github.v3+json'
+                        }
                     }
-                });
+                );
 
                 if (res.ok) {
                     const data = await res.json();
                     fileSHA = data.sha;
                     const content = atob(data.content.replace(/\n/g, ''));
                     document.getElementById('githubPreview').textContent = content;
-
-                    // Parse existing keys from file
                     parseKeysFromContent(content);
                 } else if (res.status === 404) {
                     fileSHA = null;
-                    // File doesn't exist yet, that's okay
                 }
             } catch (err) {
                 console.error('Fetch file error:', err);
@@ -1073,7 +1099,6 @@
         }
 
         function parseKeysFromContent(content) {
-            // Try to parse keys from the file content to sync local state
             const lines = content.split('\n');
             const existingKeyStrings = keys.map(k => k.key);
 
@@ -1081,28 +1106,23 @@
                 const match = line.match(/^(.+?)\s*:\s*((?:BERLIN|BRL|LITE)-[A-Z0-9-]+)/);
                 if (match) {
                     const durationLabel = match[1].trim();
-                    const keyStr = match[2].trim();
+                    const keyStr        = match[2].trim();
 
                     if (!existingKeyStrings.includes(keyStr)) {
-                        // Find duration type from label
                         let durType = 'lifetime';
                         Object.entries(durationMap).forEach(([key, val]) => {
                             if (val.label === durationLabel) durType = key;
                         });
 
-                        // Parse expiry from line if available
-                        let expiresAt = -1;
-                        const expiryMatch = line.match(/Bitiş:\s*(.+?)(?:\s*\||$)/);
-
                         keys.push({
-                            id: 'key_imported_' + Date.now() + '_' + Math.random().toString(36).substr(2, 4),
-                            key: keyStr,
-                            duration: durType,
+                            id:            'key_imported_' + Date.now() + '_' + Math.random().toString(36).substr(2, 4),
+                            key:           keyStr,
+                            duration:      durType,
                             durationLabel: durationLabel,
-                            createdAt: Date.now(),
-                            expiresAt: expiresAt,
-                            note: 'GitHub import',
-                            status: 'active'
+                            createdAt:     Date.now(),
+                            expiresAt:     -1,
+                            note:          'GitHub import',
+                            status:        'active'
                         });
                     }
                 }
@@ -1114,16 +1134,16 @@
         }
 
         function buildFileContent() {
-            const now = new Date();
-            const dateStr = formatDate(now.getTime());
+            const now        = new Date();
+            const dateStr    = formatDate(now.getTime());
             const activeKeys = keys.filter(k => k.status === 'active');
 
             let content = `═══════════════════════════════════════════════\n`;
-            content += `       BERLİN LITE — LİSANS ANAHTARLARI\n`;
-            content += `═══════════════════════════════════════════════\n\n`;
-            content += `Son Güncelleme: ${dateStr}\n`;
-            content += `Toplam Aktif Key: ${activeKeys.length}\n\n`;
-            content += `───────────────────────────────────────────────\n\n`;
+            content    += `       BERLİN LITE — LİSANS ANAHTARLARI\n`;
+            content    += `═══════════════════════════════════════════════\n\n`;
+            content    += `Son Güncelleme: ${dateStr}\n`;
+            content    += `Toplam Aktif Key: ${activeKeys.length}\n\n`;
+            content    += `───────────────────────────────────────────────\n\n`;
 
             if (activeKeys.length === 0) {
                 content += `Aktif key bulunmuyor.\n`;
@@ -1138,8 +1158,7 @@
                         expiryText = formatDate(key.expiresAt);
                     }
 
-                    const note = key.note && key.note !== '—' ? ` | Not: ${key.note}` : '';
-
+                    const note = (key.note && key.note !== '—') ? ` | Not: ${key.note}` : '';
                     content += `${key.durationLabel} : ${key.key}\n`;
                     content += `  └─ Bitiş: ${expiryText}${note}\n\n`;
                 });
@@ -1152,29 +1171,30 @@
             return content;
         }
 
-        async function pushToGitHub() {
+        async function pushToGitHub(silent = false) {
             const token = getToken();
-            const repo = getRepo();
+            const repo  = getRepo();
 
             if (!token || !repo) {
-                showToast('error', 'Önce GitHub bağlantısını kurun.');
+                if (!silent) showToast('error', 'Önce GitHub bağlantısını kurun.');
                 return;
             }
 
-            showPushOverlay('GitHub\'a push ediliyor...', `${repo}`);
+            if (!silent) showPushOverlay('GitHub\'a push ediliyor...', `${repo}`);
 
             try {
-                // First get the current file SHA (needed for updates)
+                // Güncel SHA'yı al
                 let currentSHA = fileSHA;
-
                 try {
-                    const getRes = await fetch(`https://api.github.com/repos/${repo}/contents/${GITHUB_FILE_PATH_ENCODED}`, {
-                        headers: {
-                            'Authorization': `token ${token}`,
-                            'Accept': 'application/vnd.github.v3+json'
+                    const getRes = await fetch(
+                        `https://api.github.com/repos/${repo}/contents/${GITHUB_FILE_PATH_ENCODED}`,
+                        {
+                            headers: {
+                                'Authorization': `token ${token}`,
+                                'Accept': 'application/vnd.github.v3+json'
+                            }
                         }
-                    });
-
+                    );
                     if (getRes.ok) {
                         const getData = await getRes.json();
                         currentSHA = getData.sha;
@@ -1185,7 +1205,7 @@
                     currentSHA = null;
                 }
 
-                const content = buildFileContent();
+                const content       = buildFileContent();
                 const contentBase64 = btoa(unescape(encodeURIComponent(content)));
 
                 const body = {
@@ -1193,20 +1213,20 @@
                     content: contentBase64,
                     branch: 'main'
                 };
+                if (currentSHA) body.sha = currentSHA;
 
-                if (currentSHA) {
-                    body.sha = currentSHA;
-                }
-
-                const putRes = await fetch(`https://api.github.com/repos/${repo}/contents/${GITHUB_FILE_PATH_ENCODED}`, {
-                    method: 'PUT',
-                    headers: {
-                        'Authorization': `token ${token}`,
-                        'Accept': 'application/vnd.github.v3+json',
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify(body)
-                });
+                const putRes = await fetch(
+                    `https://api.github.com/repos/${repo}/contents/${GITHUB_FILE_PATH_ENCODED}`,
+                    {
+                        method: 'PUT',
+                        headers: {
+                            'Authorization': `token ${token}`,
+                            'Accept': 'application/vnd.github.v3+json',
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(body)
+                    }
+                );
 
                 if (!putRes.ok) {
                     const errData = await putRes.json();
@@ -1216,23 +1236,23 @@
                 const putData = await putRes.json();
                 fileSHA = putData.content.sha;
 
-                hidePushOverlay();
-                showToast('success', '✅ GitHub\'a başarıyla push edildi!');
+                if (!silent) hidePushOverlay();
+                if (!silent) showToast('success', '✅ GitHub\'a başarıyla push edildi!');
 
-                // Update preview
+                // Önizlemeyi güncelle
                 document.getElementById('githubPreview').textContent = content;
                 document.getElementById('syncBadge').textContent = 'Synced';
 
             } catch (err) {
-                hidePushOverlay();
-                showToast('error', `GitHub push hatası: ${err.message}`);
+                if (!silent) hidePushOverlay();
+                if (!silent) showToast('error', `GitHub push hatası: ${err.message}`);
                 console.error('Push error:', err);
             }
         }
 
         async function fetchFromGitHub() {
             const token = getToken();
-            const repo = getRepo();
+            const repo  = getRepo();
 
             if (!token || !repo) {
                 showToast('error', 'Önce GitHub bağlantısını kurun.');
@@ -1240,21 +1260,25 @@
             }
 
             try {
-                const res = await fetch(`https://api.github.com/repos/${repo}/contents/${GITHUB_FILE_PATH_ENCODED}`, {
-                    headers: {
-                        'Authorization': `token ${token}`,
-                        'Accept': 'application/vnd.github.v3+json'
+                const res = await fetch(
+                    `https://api.github.com/repos/${repo}/contents/${GITHUB_FILE_PATH_ENCODED}`,
+                    {
+                        headers: {
+                            'Authorization': `token ${token}`,
+                            'Accept': 'application/vnd.github.v3+json'
+                        }
                     }
-                });
+                );
 
                 if (res.ok) {
-                    const data = await res.json();
-                    fileSHA = data.sha;
+                    const data    = await res.json();
+                    fileSHA       = data.sha;
                     const content = atob(data.content.replace(/\n/g, ''));
                     document.getElementById('githubPreview').textContent = content;
                     showToast('success', 'GitHub\'dan başarıyla çekildi.');
                 } else if (res.status === 404) {
-                    document.getElementById('githubPreview').textContent = 'Dosya henüz oluşturulmamış. Key oluşturduğunuzda otomatik oluşturulacak.';
+                    document.getElementById('githubPreview').textContent =
+                        'Dosya henüz oluşturulmamış. Key oluşturduğunuzda otomatik oluşturulacak.';
                     showToast('info', 'Dosya henüz GitHub\'da yok.');
                 } else {
                     throw new Error(`HTTP ${res.status}`);
@@ -1267,7 +1291,7 @@
         // ==================== KEY GENERATION ====================
         function generateRandomSegment(length) {
             const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-            let result = '';
+            let result  = '';
             const array = new Uint32Array(length);
             crypto.getRandomValues(array);
             for (let i = 0; i < length; i++) {
@@ -1295,19 +1319,19 @@
             btn.disabled = true;
 
             const keyString = generateKeyString();
-            const note = document.getElementById('keyNote').value.trim();
-            const now = Date.now();
-            const durInfo = durationMap[selectedDuration];
+            const note      = document.getElementById('keyNote').value.trim();
+            const now       = Date.now();
+            const durInfo   = durationMap[selectedDuration];
 
             const keyObj = {
-                id: 'key_' + now + '_' + Math.random().toString(36).substr(2, 6),
-                key: keyString,
-                duration: selectedDuration,
+                id:            'key_' + now + '_' + Math.random().toString(36).substr(2, 6),
+                key:           keyString,
+                duration:      selectedDuration,
                 durationLabel: durInfo.label,
-                createdAt: now,
-                expiresAt: durInfo.ms === -1 ? -1 : (durInfo.ms === 0 ? 0 : now + durInfo.ms),
-                note: note || '—',
-                status: 'active'
+                createdAt:     now,
+                expiresAt:     durInfo.ms === -1 ? -1 : (durInfo.ms === 0 ? 0 : now + durInfo.ms),
+                note:          note || '—',
+                status:        'active'
             };
 
             keys.unshift(keyObj);
@@ -1315,20 +1339,142 @@
             renderKeys();
             updateStats();
 
-            // Show key output immediately
-            document.getElementById('generatedKeyValue').textContent = keyString;
+            // Key çıktısını göster
+            document.getElementById('generatedKeyValue').textContent   = keyString;
             document.getElementById('generatedKeyDuration').textContent = durInfo.label;
-            document.getElementById('generatedKeyDate').textContent = formatDate(now);
-            document.getElementById('pushRepo').textContent = getRepo();
-            document.getElementById('keyNote').value = '';
+            document.getElementById('generatedKeyDate').textContent     = formatDate(now);
+            document.getElementById('pushRepo').textContent             = getRepo();
+            document.getElementById('keyNote').value                    = '';
 
-            // Push to GitHub
+            // GitHub'a push et
             await pushToGitHub();
-
             document.getElementById('keyOutput').classList.add('show');
 
             btn.classList.remove('loading');
             btn.disabled = false;
+        }
+
+        // ==================== AUTO DELETE (ANA DEĞİŞİKLİK) ====================
+        /**
+         * Süresi dolan keyleri tespit eder, localStorage'dan tamamen siler
+         * ve GitHub'a sessizce push eder.
+         */
+        async function checkExpiry() {
+            const now = Date.now();
+
+            // Süresi dolanları bul
+            const toDelete = keys.filter(key =>
+                key.status === 'active' &&
+                key.expiresAt > 0 &&          // 0 = tek kullanım (manuel), -1 = lifetime
+                now >= key.expiresAt
+            );
+
+            if (toDelete.length === 0) return; // Silinecek yok, dur
+
+            // İstatistik güncelle
+            totalAutoDeleted += toDelete.length;
+            localStorage.setItem('berlin_auto_deleted', totalAutoDeleted.toString());
+
+            // Süresi dolanları listeden tamamen çıkar (status değiştirme yok, direkt sil)
+            keys = keys.filter(key =>
+                !(key.status === 'active' &&
+                  key.expiresAt > 0 &&
+                  now >= key.expiresAt)
+            );
+
+            saveKeys();
+            renderKeys();
+            updateStats();
+
+            // Bildirim göster
+            showToast('info',
+                `🗑️ ${toDelete.length} key süresi dolduğu için otomatik silindi.`
+            );
+
+            // GitHub'a sessizce push et (overlay gösterme)
+            if (githubConnected) {
+                try {
+                    await pushToGitHubSilent();
+                } catch (e) {
+                    console.error('Auto-delete push error:', e);
+                }
+            }
+        }
+
+        /**
+         * Overlay göstermeden arka planda GitHub'a push eder.
+         * Sadece otomatik silme için kullanılır.
+         */
+        async function pushToGitHubSilent() {
+            const token = getToken();
+            const repo  = getRepo();
+            if (!token || !repo) return;
+
+            try {
+                let currentSHA = fileSHA;
+                try {
+                    const getRes = await fetch(
+                        `https://api.github.com/repos/${repo}/contents/${GITHUB_FILE_PATH_ENCODED}`,
+                        {
+                            headers: {
+                                'Authorization': `token ${token}`,
+                                'Accept': 'application/vnd.github.v3+json'
+                            }
+                        }
+                    );
+                    if (getRes.ok) {
+                        const getData = await getRes.json();
+                        currentSHA = getData.sha;
+                    } else {
+                        currentSHA = null;
+                    }
+                } catch (e) {
+                    currentSHA = null;
+                }
+
+                const content       = buildFileContent();
+                const contentBase64 = btoa(unescape(encodeURIComponent(content)));
+
+                const body = {
+                    message: `🗑️ Süresi dolan keyler otomatik silindi — ${formatDate(Date.now())}`,
+                    content: contentBase64,
+                    branch:  'main'
+                };
+                if (currentSHA) body.sha = currentSHA;
+
+                const putRes = await fetch(
+                    `https://api.github.com/repos/${repo}/contents/${GITHUB_FILE_PATH_ENCODED}`,
+                    {
+                        method: 'PUT',
+                        headers: {
+                            'Authorization': `token ${token}`,
+                            'Accept': 'application/vnd.github.v3+json',
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(body)
+                    }
+                );
+
+                if (putRes.ok) {
+                    const putData = await putRes.json();
+                    fileSHA = putData.content.sha;
+                    document.getElementById('githubPreview').textContent = content;
+                    document.getElementById('syncBadge').textContent = 'Synced';
+                    showToast('success', '✅ GitHub otomatik güncellendi.');
+                }
+            } catch (err) {
+                console.error('Silent push error:', err);
+            }
+        }
+
+        /**
+         * Manuel temizle butonu: expire kontrolü yap ve push et.
+         */
+        async function manualCheckAndClean() {
+            await checkExpiry();
+            if (githubConnected) {
+                await pushToGitHub();
+            }
         }
 
         // ==================== UI FUNCTIONS ====================
@@ -1340,30 +1486,6 @@
 
         function saveKeys() {
             localStorage.setItem('berlin_keys', JSON.stringify(keys));
-        }
-
-        function checkExpiry() {
-            const now = Date.now();
-            let changed = false;
-
-            keys.forEach(key => {
-                if (key.status === 'active') {
-                    if (key.expiresAt > 0 && now >= key.expiresAt) {
-                        key.status = 'expired';
-                        changed = true;
-                    }
-                }
-            });
-
-            if (changed) {
-                saveKeys();
-                renderKeys();
-                updateStats();
-                // Auto-push expired changes
-                if (githubConnected) {
-                    pushToGitHub();
-                }
-            }
         }
 
         function deleteKey(id) {
@@ -1396,24 +1518,6 @@
             document.getElementById('deleteModal').classList.remove('show');
         }
 
-        async function clearExpired() {
-            const expiredCount = keys.filter(k => k.status === 'expired' || k.status === 'used').length;
-            if (expiredCount === 0) {
-                showToast('info', 'Silinecek expired key yok.');
-                return;
-            }
-            keys = keys.filter(k => k.status === 'active');
-            saveKeys();
-            renderKeys();
-            updateStats();
-
-            showToast('success', `${expiredCount} expired key silindi.`);
-
-            if (githubConnected) {
-                await pushToGitHub();
-            }
-        }
-
         function copyKeyText(keyStr) {
             navigator.clipboard.writeText(keyStr).then(() => {
                 showToast('success', 'Key panoya kopyalandı.');
@@ -1429,16 +1533,19 @@
 
         // ==================== RENDERING ====================
         function renderKeys() {
-            const tbody = document.getElementById('keysTableBody');
-            const emptyState = document.getElementById('emptyState');
+            const tbody          = document.getElementById('keysTableBody');
+            const emptyState     = document.getElementById('emptyState');
             const tableContainer = document.getElementById('keysTableContainer');
-            const searchValue = (document.getElementById('searchInput').value || '').toLowerCase();
+            const searchValue    = (document.getElementById('searchInput').value || '').toLowerCase();
 
             let filtered = [...keys];
 
-            if (currentFilter === 'active') filtered = filtered.filter(k => k.status === 'active');
-            else if (currentFilter === 'expired') filtered = filtered.filter(k => k.status === 'expired' || k.status === 'used');
-            else if (currentFilter === 'lifetime') filtered = filtered.filter(k => k.duration === 'lifetime');
+            // Filtre uygula (artık sadece active ve lifetime var)
+            if (currentFilter === 'active') {
+                filtered = filtered.filter(k => k.status === 'active' && k.duration !== 'lifetime');
+            } else if (currentFilter === 'lifetime') {
+                filtered = filtered.filter(k => k.duration === 'lifetime');
+            }
 
             if (searchValue) {
                 filtered = filtered.filter(k =>
@@ -1449,26 +1556,24 @@
 
             if (filtered.length === 0) {
                 tableContainer.style.display = 'none';
-                emptyState.style.display = 'block';
+                emptyState.style.display     = 'block';
             } else {
                 tableContainer.style.display = 'block';
-                emptyState.style.display = 'none';
+                emptyState.style.display     = 'none';
             }
 
             tbody.innerHTML = '';
 
             filtered.forEach(key => {
-                const isExpired = key.status === 'expired' || key.status === 'used';
-                const durInfo = durationMap[key.duration] || durationMap['lifetime'];
+                const durInfo   = durationMap[key.duration] || durationMap['lifetime'];
                 const remaining = getRemaining(key);
 
                 const tr = document.createElement('tr');
-                if (isExpired) tr.className = 'key-row-expired';
 
                 tr.innerHTML = `
                     <td><span class="key-cell">${key.key}</span></td>
                     <td><span class="type-badge ${durInfo.class}">${key.durationLabel}</span></td>
-                    <td><span class="status-badge ${isExpired ? 'status-expired' : 'status-active'}">${isExpired ? '⊘ Expired' : '● Active'}</span></td>
+                    <td><span class="status-badge status-active">● Active</span></td>
                     <td><span class="time-remaining ${remaining.urgent ? 'urgent' : ''}">${remaining.text}</span></td>
                     <td style="font-size:12px; color: var(--text-muted);">${key.note || '—'}</td>
                     <td>
@@ -1482,21 +1587,20 @@
                 tbody.appendChild(tr);
             });
 
-            document.getElementById('tableInfo').textContent = `${filtered.length} / ${keys.length} key`;
+            document.getElementById('tableInfo').textContent =
+                `${filtered.length} / ${keys.length} key • Toplam ${totalAutoDeleted} key otomatik silindi`;
         }
 
         function getRemaining(key) {
-            if (key.status === 'expired') return { text: 'Süresi doldu', urgent: true };
-            if (key.status === 'used') return { text: 'Kullanıldı', urgent: true };
             if (key.expiresAt === -1) return { text: '∞ Süresiz', urgent: false };
-            if (key.expiresAt === 0) return { text: '1 kullanım', urgent: false };
+            if (key.expiresAt === 0)  return { text: '1 kullanım', urgent: false };
 
             const diff = key.expiresAt - Date.now();
-            if (diff <= 0) return { text: 'Süresi doldu', urgent: true };
+            if (diff <= 0) return { text: 'Siliniyor...', urgent: true };
 
-            const d = Math.floor(diff / 86400000);
-            const h = Math.floor((diff % 86400000) / 3600000);
-            const m = Math.floor((diff % 3600000) / 60000);
+            const d        = Math.floor(diff / 86400000);
+            const h        = Math.floor((diff % 86400000) / 3600000);
+            const m        = Math.floor((diff % 3600000) / 60000);
             const isUrgent = diff < 3600000;
 
             if (d > 0) return { text: `${d}g ${h}s kaldı`, urgent: isUrgent };
@@ -1505,10 +1609,13 @@
         }
 
         function updateStats() {
-            document.getElementById('statTotal').textContent = keys.length;
-            document.getElementById('statActive').textContent = keys.filter(k => k.status === 'active').length;
-            document.getElementById('statExpired').textContent = keys.filter(k => k.status === 'expired' || k.status === 'used').length;
-            document.getElementById('statLifetime').textContent = keys.filter(k => k.duration === 'lifetime' && k.status === 'active').length;
+            const active   = keys.filter(k => k.status === 'active');
+            const lifetime = keys.filter(k => k.duration === 'lifetime' && k.status === 'active');
+
+            document.getElementById('statTotal').textContent    = keys.length;
+            document.getElementById('statActive').textContent   = active.length;
+            document.getElementById('statExpired').textContent  = totalAutoDeleted;
+            document.getElementById('statLifetime').textContent = lifetime.length;
         }
 
         function setFilter(filter, btn) {
@@ -1529,15 +1636,16 @@
             if (tab === 'keys') {
                 const content = buildFileContent();
                 document.getElementById('githubPreview').textContent = content;
-                document.getElementById('previewRepoName').textContent = `${getRepo() || 'bugrahena/BERL-N-KEYS'} → BERLİN KEYS`;
+                document.getElementById('previewRepoName').textContent =
+                    `${getRepo() || 'bugrahena/BERL-N-KEYS'} → BERLİN KEYS`;
             }
         }
 
         // ==================== TOAST ====================
         function showToast(type, message) {
             const container = document.getElementById('toastContainer');
-            const icons = { success: '✅', error: '❌', info: 'ℹ️' };
-            const toast = document.createElement('div');
+            const icons     = { success: '✅', error: '❌', info: 'ℹ️' };
+            const toast     = document.createElement('div');
             toast.className = `toast ${type}`;
             toast.innerHTML = `<span>${icons[type]}</span><span>${message}</span>`;
             container.appendChild(toast);
@@ -1549,7 +1657,7 @@
 
         // ==================== PUSH OVERLAY ====================
         function showPushOverlay(text, sub) {
-            document.getElementById('pushText').textContent = text;
+            document.getElementById('pushText').textContent    = text;
             document.getElementById('pushSubtext').textContent = sub;
             document.getElementById('pushOverlay').classList.add('show');
         }
@@ -1560,34 +1668,40 @@
 
         // ==================== UTILITY ====================
         function formatDate(ts) {
-            const d = new Date(ts);
+            const d   = new Date(ts);
             const pad = n => String(n).padStart(2, '0');
             return `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
         }
 
         // ==================== INIT ====================
         function init() {
-            // Restore saved token/repo
+            // Kayıtlı token/repo geri yükle
             const savedToken = localStorage.getItem('berlin_gh_token');
-            const savedRepo = localStorage.getItem('berlin_gh_repo');
+            const savedRepo  = localStorage.getItem('berlin_gh_repo');
 
             if (savedToken) document.getElementById('githubToken').value = savedToken;
-            if (savedRepo) document.getElementById('githubRepo').value = savedRepo;
+            if (savedRepo)  document.getElementById('githubRepo').value  = savedRepo;
 
-            // Auto-connect if saved
+            // Otomatik bağlan
             if (savedToken && savedRepo) {
                 testConnection();
             }
 
+            // İlk render
             checkExpiry();
             renderKeys();
             updateStats();
 
-            // Check expiry every 30 sec
-            setInterval(() => {
-                checkExpiry();
+            // ✅ Her 30 saniyede expire kontrolü — süresi dolanlar silinir ve GitHub güncellenir
+            setInterval(async () => {
+                await checkExpiry();
                 renderKeys();
             }, 30000);
+
+            // Geri sayım için her saniye render et (kalan süre doğru görünsün)
+            setInterval(() => {
+                renderKeys();
+            }, 60000);
         }
 
         init();
